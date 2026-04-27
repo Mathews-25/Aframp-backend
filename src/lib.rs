@@ -250,6 +250,10 @@ pub mod kya;
 #[cfg(feature = "database")]
 pub mod dispute;
 
+// Issue #407 — Banking Partner Integration & Account Linkage
+#[cfg(feature = "database")]
+pub mod banking;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]
