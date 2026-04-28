@@ -253,6 +253,9 @@ pub mod dispute;
 // AML/KYC Compliance Effectiveness Reporting System
 pub mod compliance_effectiveness;
 
+// KYB (Know Your Business) — Corporate Entity Verification
+pub mod kyb;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]
