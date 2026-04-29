@@ -37,26 +37,10 @@ mod services;
 mod telemetry;
 mod wallet;
 mod workers;
-// Issue #334 — Merchant CRM & Customer Insights
-mod merchant_crm;
-// Issue #333 — Merchant Invoicing & Automated Tax Calculation
-mod merchant_invoicing;
-// Issue #336 — Merchant Multi-Sig & Treasury Controls
-mod merchant_multisig;
-// Issue #335 — Multi-Store & Franchise Management
-mod franchise;
-// Issue #322 — Wallet Creation & Stellar Account Provisioning
-mod wallet_provisioning;
-mod oracle;
-mod agent_cfo;
-mod agent_swarm;
-mod agent_dashboard;
+mod recurring;
+mod capacity;
 
-// Issue #337 — Merchant Dispute Resolution & Clawback Management
-mod dispute;
-
-// DeFi Integration Architecture & Protocol Selection (Issue #370)
-mod defi;
+// Imports
 use std::sync::Arc;
 use crate::config::AppConfig;
 use crate::health::{HealthChecker, HealthStatus};
@@ -955,6 +939,17 @@ async fn main() -> anyhow::Result<()> {
 
     // Create the application router with logging middleware
     info!("🛣️  Setting up application routes...");
+
+    // ── Partner Integration Framework (Issue #348) ────────────────────────────
+    let partner_hub_routes = if let Some(pool) = db_pool.clone() {
+        info!("✅ Partner Integration Framework started");
+        let worker = partner::DeprecationNotificationWorker::new(pool.clone());
+        tokio::spawn(worker.run());
+        partner::partner_routes(pool, audit_writer.clone())
+    } else {
+        info!("⏭️  Skipping partner hub routes (no database)");
+        Router::new()
+    };
 
     // ── LP Onboarding & Partner Portal ────────────────────────────────────────
     let lp_onboarding_routes = if let Some(pool) = db_pool.clone() {
@@ -1929,6 +1924,123 @@ async fn main() -> anyhow::Result<()> {
     // ── OpenAPI / Swagger UI (Issue #114) ────────────────────────────────────
     let openapi_routes = api::openapi::openapi_routes();
 
+    // ── Remittance Partner routes (Issue #408) ────────────────────────────────
+    let partner_routes = if let Some(pool) = db_pool.clone() {
+        use api::partner::{PartnerApiState, get_quote, initiate_transfer,
+            get_transfer_status, get_liquidity, get_settlements, get_branding};
+        use api::admin::partner::{AdminPartnerState, create_partner, list_partners,
+            get_partner, update_partner_status, upsert_branding, get_branding as admin_get_branding,
+            upsert_fee, list_fees, upsert_limits, get_limits, list_settlements as admin_list_settlements};
+        use axum::routing::put;
+
+        let repo = std::sync::Arc::new(
+            database::partner_repository::PartnerRepository::new(pool.clone())
+        );
+        let svc = std::sync::Arc::new(services::partner::PartnerService::new(repo.clone()));
+
+        let partner_state = std::sync::Arc::new(PartnerApiState { service: svc, repo: repo.clone() });
+        let admin_partner_state = std::sync::Arc::new(AdminPartnerState { repo });
+
+        // Start settlement worker
+        let settlement_enabled = std::env::var("SETTLEMENT_WORKER_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase() != "false";
+        if settlement_enabled {
+            let cfg = workers::settlement::SettlementWorkerConfig::from_env();
+            let worker = workers::settlement::SettlementWorker::new(pool, cfg);
+            tokio::spawn(worker.run(worker_shutdown_rx.clone()));
+            info!("✅ Settlement worker started");
+        }
+
+        let partner_api = Router::new()
+            .route("/api/partner/quote", axum::routing::post(get_quote))
+            .route("/api/partner/transfers", axum::routing::post(initiate_transfer))
+            .route("/api/partner/transfers/:id", axum::routing::get(get_transfer_status))
+            .route("/api/partner/liquidity", axum::routing::get(get_liquidity))
+            .route("/api/partner/settlements", axum::routing::get(get_settlements))
+            .route("/api/partner/branding", axum::routing::get(get_branding))
+            .with_state(partner_state);
+
+        let admin_partner_api = Router::new()
+            .route("/api/admin/partners", axum::routing::post(create_partner).get(list_partners))
+            .route("/api/admin/partners/:id", axum::routing::get(get_partner))
+            .route("/api/admin/partners/:id/status", axum::routing::patch(update_partner_status))
+            .route("/api/admin/partners/:id/branding", put(upsert_branding).get(admin_get_branding))
+            .route("/api/admin/partners/:id/fees", put(upsert_fee).get(list_fees))
+            .route("/api/admin/partners/:id/limits", put(upsert_limits).get(get_limits))
+            .route("/api/admin/partners/:id/settlements", axum::routing::get(admin_list_settlements))
+            .with_state(admin_partner_state);
+
+        partner_api.merge(admin_partner_api)
+    } else {
+        info!("⏭️  Skipping partner routes (no database)");
+        Router::new()
+    };
+
+    // ── Wallet Analytics routes (Issue #369) ─────────────────────────────────
+    let analytics_routes = if let Some(pool) = db_pool.clone() {
+        use api::analytics::{AnalyticsState, get_summary, get_spending, get_trends,
+            get_counterparties, get_providers, get_insights,
+            get_insight_preferences, update_insight_preferences, export_analytics};
+        use api::admin::analytics::{AdminAnalyticsState, get_overview, get_activity,
+            get_retention, get_cohorts, get_risk_distribution, get_anomalies,
+            get_behaviour_profile, export_admin_analytics};
+        use axum::routing::put;
+
+        let repo = std::sync::Arc::new(
+            database::analytics_repository::AnalyticsRepository::new(pool.clone())
+        );
+        let consumer_state = std::sync::Arc::new(AnalyticsState {
+            repo: repo.clone(),
+            redis: redis_cache.clone().map(std::sync::Arc::new),
+        });
+        let admin_state = std::sync::Arc::new(AdminAnalyticsState { repo });
+
+        // Start analytics snapshot worker
+        let analytics_enabled = std::env::var("ANALYTICS_WORKER_ENABLED")
+            .unwrap_or_else(|_| "true".to_string())
+            .to_lowercase() != "false";
+        if analytics_enabled {
+            let worker_config = workers::analytics_snapshot::SnapshotWorkerConfig::from_env();
+            let worker = workers::analytics_snapshot::AnalyticsSnapshotWorker::new(pool, worker_config);
+            tokio::spawn(worker.run(worker_shutdown_rx.clone()));
+            info!("✅ Analytics snapshot worker started");
+        }
+
+        let consumer_routes = Router::new()
+            .route("/api/wallet/:wallet_id/analytics/summary", get(get_summary))
+            .route("/api/wallet/:wallet_id/analytics/spending", get(get_spending))
+            .route("/api/wallet/:wallet_id/analytics/trends", get(get_trends))
+            .route("/api/wallet/:wallet_id/analytics/counterparties", get(get_counterparties))
+            .route("/api/wallet/:wallet_id/analytics/providers", get(get_providers))
+            .route("/api/wallet/:wallet_id/analytics/insights", get(get_insights))
+            .route("/api/wallet/:wallet_id/analytics/insights/preferences",
+                get(get_insight_preferences).put(update_insight_preferences))
+            .route("/api/wallet/:wallet_id/analytics/export", post(export_analytics))
+            .with_state(consumer_state);
+
+        let admin_analytics_routes = Router::new()
+            .route("/api/admin/analytics/wallets/overview", get(get_overview))
+            .route("/api/admin/analytics/wallets/activity", get(get_activity))
+            .route("/api/admin/analytics/wallets/retention", get(get_retention))
+            .route("/api/admin/analytics/wallets/cohorts", get(get_cohorts))
+            .route("/api/admin/analytics/wallets/risk-distribution", get(get_risk_distribution))
+            .route("/api/admin/analytics/wallets/anomalies", get(get_anomalies))
+            .route("/api/admin/wallets/:wallet_id/behaviour-profile", get(get_behaviour_profile))
+            .route("/api/admin/analytics/wallets/export", post(export_admin_analytics))
+            .with_state(admin_state);
+
+        consumer_routes.merge(admin_analytics_routes)
+    } else {
+        info!("⏭️  Skipping analytics routes (no database)");
+        Router::new()
+    };
+
+    // Setup transaction history routes
+    let history_routes = if let Some(pool) = db_pool.clone() {
+        let history_state = std::sync::Arc::new(api::transaction_history::TransactionHistoryState {
+            pool: std::sync::Arc::new(pool),
+            cache: redis_cache.clone().map(std::sync::Arc::new),
     // ── Public Transparency / Proof-of-Reserves API ───────────────────────────
     let transparency_routes = if let Some(pool) = db_pool.clone() {
         let transparency_key = std::env::var("TRANSPARENCY_SIGNING_KEY").ok();
@@ -2154,6 +2266,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(admin_routes)
         .merge(adaptive_rl_admin_routes)
         .merge(openapi_routes)
+        .merge(analytics_routes)
+        .merge(partner_routes)
         .merge(recurring_routes)
     // ── Transparency Portal (Issue #239) ─────────────────────────────────────
     let transparency_routes = if let Some(pool) = db_pool.clone() {
@@ -2317,14 +2431,29 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
 
-    let app = Router::new()
-        .route("/", get(root))
-        .route("/health", get(health))
-        .route("/health/ready", get(readiness))
-        .route("/health/live", get(liveness))
-        .route("/metrics", get(metrics::handler::metrics_handler))
-        .route("/api/stellar/account/{address}", get(get_stellar_account))
-        .route("/api/trustlines/operations", post(create_trustline_operation))
+    // ── Performance SLA Management & Breach Response (Issue #405) ────────────
+    let sla_routes = if let Some(pool) = db_pool.clone() {
+        let http = reqwest::Client::new();
+        let sla_state = std::sync::Arc::new(sla::SlaState {
+            repo: std::sync::Arc::new(sla::SlaRepository::new(pool.clone())),
+            pool: pool.clone(),
+        });
+
+        // SLA monitor worker — evaluates SLOs every 60 seconds
+        let monitor = sla::SlaMonitorWorker::new(pool.clone(), http);
+        tokio::spawn(monitor.run(worker_shutdown_rx.clone()));
+        info!("✅ SLA monitor worker started (60s interval)");
+
+        // Monthly compliance report worker
+        let report_worker = sla::SlaReportWorker::new(pool);
+        tokio::spawn(report_worker.run(worker_shutdown_rx.clone()));
+        info!("✅ SLA report worker started");
+
+        sla::sla_routes(sla_state)
+    } else {
+        info!("⏭️  Skipping SLA routes (no database)");
+        Router::new()
+    };
         .route("/api/trustlines/operations/{id}", patch(update_trustline_operation_status))
         .route("/api/trustlines/operations/wallet/{address}", get(list_trustline_operations_by_wallet))
         .route("/api/fees/calculate", post(calculate_fee))
@@ -2374,17 +2503,21 @@ async fn main() -> anyhow::Result<()> {
         .merge(oracle_routes)
         .merge(governance_routes)
         .merge(lp_onboarding_routes)
+        .merge(partner_hub_routes)
         .merge(agent_cfo_routes)
         .merge(agent_swarm_routes)
         .merge(agent_dashboard_routes)
         .merge(pos_routes)
         .merge(dispute_routes)
+        .merge(sla_routes)
         .with_state(AppState {
             db_pool,
             redis_cache,
             stellar_client,
             health_checker,
             warming_state: Some(warming_state),
+            shard_router: None, // populated below if DB is available
+        })
         });
 
     // Apply middleware conditionally based on available services
@@ -2672,6 +2805,7 @@ struct AppState {
     stellar_client: Option<StellarClient>,
     health_checker: HealthChecker,
     warming_state: Option<WarmingState>,
+    shard_router: Option<std::sync::Arc<database::shard::ShardRouter>>,
 }
 
 // Handlers

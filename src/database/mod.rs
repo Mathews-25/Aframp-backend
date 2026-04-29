@@ -25,6 +25,11 @@ pub mod trustline_operation_repository;
 pub mod trustline_repository;
 pub mod wallet_repository;
 pub mod webhook_repository;
+pub mod analytics_repository;
+pub mod partner_repository;
+pub mod shard;
+pub mod saga;
+pub mod shard_migration;
 pub mod reconciliation_repository;
 
 use sqlx::postgres::PgPoolOptions;

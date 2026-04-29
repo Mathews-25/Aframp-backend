@@ -24,6 +24,10 @@ pub mod database;
 #[cfg(feature = "database")]
 pub mod chains;
 
+// Partner ecosystem integrations
+#[cfg(feature = "database")]
+pub mod partner;
+
 // Error handling
 #[cfg(feature = "database")]
 pub mod error;
@@ -159,6 +163,10 @@ pub mod agent_cfo;
 // Agent Swarm Intelligence — decentralized P2P coordination layer
 #[cfg(feature = "database")]
 pub mod agent_swarm;
+
+// Performance SLA Management & Breach Response (Issue #405)
+#[cfg(feature = "database")]
+pub mod sla;
 // Agent Admin Dashboard — HITL control system for autonomous agents
 #[cfg(feature = "database")]
 pub mod agent_dashboard;
@@ -250,9 +258,18 @@ pub mod kya;
 #[cfg(feature = "database")]
 pub mod dispute;
 
-// Automated SAR (Suspicious Activity Report) workflow (Issue #420)
+// Issue #379 — cNGN Collateralized Lending
 #[cfg(feature = "database")]
-pub mod sar;
+pub mod collateral_lending;
+
+// Issue #399 — Event-Driven Architecture (async event bus, DLQ, idempotent consumers)
+#[cfg(feature = "database")]
+pub mod event_bus;
+
+// Issue #393 — Travel Rule Compliance (FATF Rec. 16, IVMS101, TRISA/TRUST/OpenVASP)
+#[cfg(feature = "database")]
+pub mod travel_rule;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]

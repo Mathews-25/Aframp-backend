@@ -48,6 +48,11 @@ pub mod transaction;
 #[cfg(feature = "database")]
 pub mod trustline_operation;
 pub mod webhook_processor;
+pub mod notification;
+#[cfg(feature = "database")]
+pub mod analytics;
+#[cfg(feature = "database")]
+pub mod partner;
 #[cfg(feature = "database")]
 pub mod reconciliation;
 pub mod transparency;
