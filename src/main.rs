@@ -15,6 +15,7 @@ mod config_validation;
 mod database;
 mod ddos;
 mod developer_portal;
+mod distributed_api;
 mod error;
 mod health;
 mod liquidity;
