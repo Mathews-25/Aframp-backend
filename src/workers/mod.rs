@@ -24,6 +24,8 @@ pub mod transaction_monitor;
 pub mod webhook_retry;
 pub mod bill_processor;
 pub mod batch_processor;
+pub mod analytics_snapshot;
+pub mod settlement;
 pub mod bill_processor {
     pub mod account_verification;
     pub mod payment_executor;

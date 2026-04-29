@@ -25,6 +25,10 @@ pub mod rate_providers;
 pub mod trustline_operation;
 pub mod webhook_processor;
 pub mod notification;
+#[cfg(feature = "database")]
+pub mod analytics;
+#[cfg(feature = "database")]
+pub mod partner;
 
 // Re-export blockchain traits for convenience
 #[cfg(feature = "database")]
