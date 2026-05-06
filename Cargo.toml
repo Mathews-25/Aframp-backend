@@ -1,5 +1,5 @@
 [package]
-name = "Bitmesh-backend"
+name = "Aframp-backend"
 version = "0.1.0"
 edition = "2021"
 
@@ -176,6 +176,7 @@ opentelemetry-http = { version = "0.11", optional = true }
 # Bridge layer — connects `tracing` spans to the OpenTelemetry SDK so every
 # tracing::info_span! call is automatically exported as an OTLP span.
 tracing-opentelemetry = { version = "0.23", optional = true }
+once_cell = "1.21.4"
 
 # ---------------------------------------------------------------------------
 # Binaries
