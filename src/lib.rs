@@ -171,6 +171,9 @@ pub mod agent_dashboard;
 // Multi-Signature Governance Framework — M-of-N signing for Mint/Burn/SetOptions
 #[cfg(feature = "database")]
 pub mod multisig;
+// Mint Authorization Framework — cNGN issuance via M-of-N multi-signature approval (#213)
+#[cfg(feature = "database")]
+pub mod mint_authorization;
 // Adaptive rate limiting and throttling system
 #[cfg(feature = "cache")]
 pub mod adaptive_rate_limit;
