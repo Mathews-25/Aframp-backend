@@ -1,56 +1,120 @@
-import createIntlMiddleware from 'next-intl/middleware';
-import { NextRequest, NextResponse } from 'next/server';
-import { SUPPORTED_LOCALES, DEFAULT_LOCALE } from '@/config/locales';
+/**
+ * Next.js Middleware
+ * Client-side navigation guards for KYB/KYC enforcement and route protection
+ */
 
-const intlMiddleware = createIntlMiddleware({
-  locales: SUPPORTED_LOCALES,
-  defaultLocale: DEFAULT_LOCALE,
-  localeDetection: true,
-  localePrefix: 'always',
+import { NextResponse, type NextRequest } from 'next/server';
+import createMiddleware from 'next-intl/middleware';
+import { locales, defaultLocale } from './config/locales';
+
+// ============================================================================
+// Route Protection Configuration
+// ============================================================================
+
+const PUBLIC_ROUTES = [
+  '/auth/login',
+  '/auth/register',
+  '/auth/forgot-password',
+  '/auth/reset-password',
+];
+
+const KYC_REQUIRED_ROUTES = [
+  '/dashboard',
+  '/wallets',
+  '/transactions',
+  '/exchange',
+  '/send',
+  '/receive',
+];
+
+const KYB_REQUIRED_ROUTES = [
+  '/partner',
+  '/merchant',
+  '/api-keys',
+  '/webhooks',
+];
+
+// ============================================================================
+// Internationalization Middleware
+// ============================================================================
+
+const intlMiddleware = createMiddleware({
+  locales,
+  defaultLocale,
+  localePrefix: 'as-needed',
 });
 
-const PUBLIC_PATHS = ['/login', '/signup', '/forgot-password', '/reset-password'];
-const PROTECTED_PATHS = ['/dashboard', '/wallet', '/transactions', '/exchange', '/admin'];
+// ============================================================================
+// Main Middleware
+// ============================================================================
 
-export async function middleware(request: NextRequest) {
+export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  
+
+  // Apply internationalization
+  const response = intlMiddleware(request);
+
   // Extract locale from pathname
-  const pathnameLocale = SUPPORTED_LOCALES.find(
-    locale => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
+  const pathnameLocale = locales.find(
+    (locale) => pathname.startsWith(`/${locale}/`) || pathname === `/${locale}`
   );
-  
-  // Get path without locale prefix
-  const pathWithoutLocale = pathnameLocale 
+  const pathWithoutLocale = pathnameLocale
     ? pathname.slice(`/${pathnameLocale}`.length) || '/'
     : pathname;
 
-  // Check if path requires authentication
-  const isProtectedPath = PROTECTED_PATHS.some(path => pathWithoutLocale.startsWith(path));
-  const isPublicPath = PUBLIC_PATHS.some(path => pathWithoutLocale.startsWith(path));
+  // Check authentication
+  const accessToken = request.cookies.get('aframp_access_token')?.value;
+  const isAuthenticated = !!accessToken;
 
-  // Get session from cookie
-  const sessionCookie = request.cookies.get('__aframp_session');
-  const hasSession = !!sessionCookie?.value;
+  // Public routes - allow access
+  if (PUBLIC_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
+    return response;
+  }
 
-  // Redirect unauthenticated users from protected paths
-  if (isProtectedPath && !hasSession) {
-    const locale = pathnameLocale || DEFAULT_LOCALE;
-    const loginUrl = new URL(`/${locale}/login`, request.url);
-    loginUrl.searchParams.set('redirect', pathWithoutLocale);
+  // Protected routes - require authentication
+  if (!isAuthenticated) {
+    const loginUrl = new URL(
+      pathnameLocale ? `/${pathnameLocale}/auth/login` : '/auth/login',
+      request.url
+    );
+    loginUrl.searchParams.set('redirect', pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Redirect authenticated users from public auth pages
-  if (isPublicPath && hasSession && (pathWithoutLocale === '/login' || pathWithoutLocale === '/signup')) {
-    const locale = pathnameLocale || DEFAULT_LOCALE;
-    return NextResponse.redirect(new URL(`/${locale}/dashboard`, request.url));
+  // KYC enforcement
+  if (KYC_REQUIRED_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
+    const kycStatus = request.cookies.get('aframp_kyc_status')?.value;
+    
+    if (kycStatus !== 'approved') {
+      const kycUrl = new URL(
+        pathnameLocale ? `/${pathnameLocale}/onboarding/kyc` : '/onboarding/kyc',
+        request.url
+      );
+      return NextResponse.redirect(kycUrl);
+    }
   }
 
-  // Apply internationalization middleware
-  return intlMiddleware(request);
+  // KYB enforcement for partner/merchant routes
+  if (KYB_REQUIRED_ROUTES.some((route) => pathWithoutLocale.startsWith(route))) {
+    const kybStatus = request.cookies.get('aframp_kyb_status')?.value;
+    
+    if (kybStatus !== 'approved') {
+      const kybUrl = new URL(
+        pathnameLocale ? `/${pathnameLocale}/onboarding/kyb` : '/onboarding/kyb',
+        request.url
+      );
+      return NextResponse.redirect(kybUrl);
+    }
+  }
+
+  return response;
 }
 
 export const config = {
-  matcher: ['/', '/(en|fr|ha|yo|ig|sw)/:path*'],
+  matcher: [
+    // Match all pathnames except for
+    // - … if they start with `/api`, `/_next` or `/_vercel`
+    // - … the ones containing a dot (e.g. `favicon.ico`)
+    '/((?!api|_next|_vercel|.*\\..*).*)',
+  ],
 };
