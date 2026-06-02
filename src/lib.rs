@@ -270,6 +270,22 @@ pub mod event_bus;
 #[cfg(feature = "database")]
 pub mod travel_rule;
 
+// Issue #487 — Smart Order Routing & Treasury Rebalancing
+#[cfg(feature = "database")]
+pub mod sor;
+
+// Issue #488 — Flash Liquidity Provisioning & On-Chain Credit Facilities
+#[cfg(feature = "database")]
+pub mod flash_liquidity;
+
+// Issue #491 — Decentralized Compliance Oracle & Identity Verification Bridge
+#[cfg(feature = "database")]
+pub mod compliance_oracle;
+
+// Issue #490 — Automated Gas & Fee Optimization Engine
+#[cfg(feature = "database")]
+pub mod fee_optimizer;
+
 // Contract error enum for Soroban (only when not using database feature)
 #[cfg(not(feature = "database"))]
 #[contracterror]
