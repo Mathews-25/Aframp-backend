@@ -232,6 +232,11 @@ path = "tests/aml_integration_tests.rs"
 required-features = ["database"]
 
 [[test]]
+name = "travel_rule_integration"
+path = "tests/travel_rule_integration.rs"
+required-features = ["database"]
+
+[[test]]
 name = "fee_calculation_test"
 path = "tests/fee_calculation_test.rs"
 required-features = ["database"]

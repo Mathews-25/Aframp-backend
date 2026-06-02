@@ -34,6 +34,8 @@ use crate::services::partner::{FxQuote, PartnerError, PartnerService};
 pub struct PartnerApiState {
     pub service: Arc<PartnerService>,
     pub repo: Arc<PartnerRepository>,
+    /// Optional Travel Rule service for cross-border transfer gating
+    pub travel_rule_service: Option<Arc<crate::travel_rule::TravelRuleService>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -275,21 +277,89 @@ pub async fn initiate_transfer(
         )
         .await
     {
-        Ok(t) => (
-            StatusCode::CREATED,
-            Json(TransferResponse {
-                id: t.id,
-                partner_ref: t.partner_ref,
-                from_currency: t.from_currency,
-                to_currency: t.to_currency,
-                from_amount: t.from_amount.to_string(),
-                to_amount: t.to_amount.to_string(),
-                fee_amount: t.fee_amount.to_string(),
-                status: t.status,
-                created_at: t.created_at,
-            }),
-        )
-            .into_response(),
+        Ok(t) => {
+            // Travel Rule gate — applies to cross-border transfers and high-risk corridors
+            if let Some(tr_svc) = &state.travel_rule_service {
+                use crate::travel_rule::models::{
+                    InitiateTravelRuleRequest, Ivms101NaturalPerson, Ivms101Person,
+                };
+                use rust_decimal::Decimal;
+                use std::str::FromStr;
+
+                let is_cross_border = body.from_currency != body.to_currency;
+                let transaction_type = if is_cross_border { "cross_border" } else { "cngn_transfer" };
+
+                // Derive destination jurisdiction from to_currency (best-effort stub)
+                let dest_jurisdiction = match body.to_currency.as_str() {
+                    "KES" => "KE",
+                    "GHS" => "GH",
+                    "ZAR" => "ZA",
+                    "USD" => "US",
+                    _ => "NG",
+                };
+                let high_risk = tr_svc.is_high_risk_corridor("NG", dest_jurisdiction);
+
+                let amount_dec = Decimal::from_str(&body.from_amount).unwrap_or(Decimal::ZERO);
+                let requires_tr = high_risk
+                    || tr_svc
+                        .requires_travel_rule(amount_dec, &body.from_currency, transaction_type, dest_jurisdiction)
+                        .await;
+
+                if requires_tr {
+                    let originator = Ivms101Person::Natural(Ivms101NaturalPerson {
+                        first_name: format!("Partner-{}", partner.id),
+                        last_name: "".into(),
+                        date_of_birth: None,
+                        national_id: None,
+                        address: None,
+                        country_of_residence: Some("NG".into()),
+                        account_number: Some(format!("partner-{}", partner.id)),
+                    });
+                    let beneficiary = Ivms101Person::Natural(Ivms101NaturalPerson {
+                        first_name: "Beneficiary".into(),
+                        last_name: "".into(),
+                        date_of_birth: None,
+                        national_id: None,
+                        address: None,
+                        country_of_residence: Some(dest_jurisdiction.into()),
+                        account_number: Some(body.partner_ref.clone()),
+                    });
+                    let tr_req = InitiateTravelRuleRequest {
+                        transaction_id: t.id.to_string(),
+                        beneficiary_vasp_id: "unhosted".into(),
+                        originator,
+                        beneficiary,
+                        transfer_amount: body.from_amount.clone(),
+                        asset_code: body.from_currency.clone(),
+                        destination_address: None,
+                    };
+                    if let Err(e) = tr_svc.initiate_outbound(tr_req).await {
+                        tracing::warn!(
+                            transfer_id = %t.id,
+                            error = %e,
+                            high_risk,
+                            "Travel Rule initiation failed for partner transfer — proceeding with monitoring"
+                        );
+                    }
+                }
+            }
+
+            (
+                StatusCode::CREATED,
+                Json(TransferResponse {
+                    id: t.id,
+                    partner_ref: t.partner_ref,
+                    from_currency: t.from_currency,
+                    to_currency: t.to_currency,
+                    from_amount: t.from_amount.to_string(),
+                    to_amount: t.to_amount.to_string(),
+                    fee_amount: t.fee_amount.to_string(),
+                    status: t.status,
+                    created_at: t.created_at,
+                }),
+            )
+                .into_response()
+        }
         Err(e) => partner_err(e),
     }
 }

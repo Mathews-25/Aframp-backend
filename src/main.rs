@@ -1430,6 +1430,51 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
 
+    // ── Travel Rule service — built once, shared by offramp, partner, and TR routes ──
+    let shared_travel_rule_service: Option<std::sync::Arc<crate::travel_rule::TravelRuleService>> =
+        if let (Some(ref pool), Some(ref redis)) = (&db_pool, &redis_cache) {
+            use crate::aml::screening::{AmlProviderConfig, SanctionsScreeningService};
+            use crate::aml::case_management::AmlCaseManager;
+            use crate::travel_rule::{TravelRuleRepository, TravelRuleService};
+
+            let tr_repo = std::sync::Arc::new(TravelRuleRepository::new(pool.clone()));
+            let aml_cfg = AmlProviderConfig::default();
+            let sanctions = std::sync::Arc::new(SanctionsScreeningService::new(
+                aml_cfg,
+                std::sync::Arc::new(redis.clone()),
+            ));
+            let aml_case_manager = std::sync::Arc::new(
+                AmlCaseManager::new(pool.clone(), notification_service.clone())
+            );
+
+            // Build ExchangeRateService for NGN threshold conversion
+            let rate_repo = database::exchange_rate_repository::ExchangeRateRepository::new(pool.clone());
+            let rate_config = services::exchange_rate::ExchangeRateServiceConfig::default();
+            let exchange_rate_svc = std::sync::Arc::new(
+                services::exchange_rate::ExchangeRateService::new(rate_repo, rate_config)
+            );
+
+            let event_bus_arc = std::sync::Arc::new(crate::event_bus::bus::EventBus::new(pool.clone()));
+            let our_vasp_id = std::env::var("PLATFORM_VASP_ID").unwrap_or_else(|_| "aframp-ng".into());
+
+            let tr_svc = std::sync::Arc::new(TravelRuleService::new(
+                tr_repo.clone(),
+                sanctions,
+                aml_case_manager,
+                event_bus_arc,
+                exchange_rate_svc,
+                our_vasp_id,
+            ));
+
+            // Start SLA worker
+            crate::travel_rule::TravelRuleSlaWorker::new(tr_repo).start();
+            info!("✅ Travel Rule service initialised");
+            Some(tr_svc)
+        } else {
+            info!("⏭️  Travel Rule service skipped (no database or Redis)");
+            None
+        };
+
     // Setup offramp routes (withdrawal initiation)
     let offramp_routes = if let (Some(pool), Some(cache)) = (db_pool.clone(), redis_cache.clone()) {
         let system_wallet_address = std::env::var("SYSTEM_WALLET_ADDRESS")
@@ -2071,6 +2116,29 @@ async fn main() -> anyhow::Result<()> {
         Router::new()
     };
 
+    // ── Travel Rule API routes — reuse the already-initialised shared service ──
+    let travel_rule_routes = if let (Some(ref pool), Some(_redis)) = (&db_pool, &redis_cache) {
+        use crate::travel_rule::{TravelRuleRepository, TravelRuleState};
+
+        // Repository is lightweight — create fresh for the state (shares pool)
+        let tr_repo = std::sync::Arc::new(TravelRuleRepository::new(pool.clone()));
+
+        if let Some(ref tr_svc) = shared_travel_rule_service {
+            let tr_state = std::sync::Arc::new(TravelRuleState {
+                repo: tr_repo,
+                service: tr_svc.clone(),
+            });
+            info!("✅ Travel Rule compliance routes enabled");
+            crate::travel_rule::travel_rule_router(tr_state)
+        } else {
+            info!("⏭️  Skipping Travel Rule routes (service not initialised)");
+            Router::new()
+        }
+    } else {
+        info!("⏭️  Skipping Travel Rule routes (no database or Redis)");
+        Router::new()
+    };
+
     // ── KYB (Know Your Business) — Corporate Entity Verification ─────────────
     let kyb_routes = if let Some(ref pool) = db_pool {
         let kyb_repo = std::sync::Arc::new(kyb::KybRepository::new(pool.clone()));
@@ -2170,7 +2238,11 @@ async fn main() -> anyhow::Result<()> {
         );
         let svc = std::sync::Arc::new(services::partner::PartnerService::new(repo.clone()));
 
-        let partner_state = std::sync::Arc::new(PartnerApiState { service: svc, repo: repo.clone() });
+        let partner_state = std::sync::Arc::new(PartnerApiState {
+            service: svc,
+            repo: repo.clone(),
+            travel_rule_service: shared_travel_rule_service.clone(),
+        });
         let admin_partner_state = std::sync::Arc::new(AdminPartnerState { repo });
 
         // Start settlement worker
