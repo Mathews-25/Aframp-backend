@@ -134,9 +134,6 @@ pub mod event_bus;
 pub mod metrics;
 
 #[cfg(feature = "database")]
-pub mod monitoring;
-
-#[cfg(feature = "database")]
 pub mod audit;
 
 #[cfg(feature = "database")]
@@ -156,9 +153,8 @@ pub mod masking;
 #[cfg(feature = "database")]
 pub mod services;
 
-// ── Multi-region ─────────────────────────────────────────────────────────────
-#[cfg(feature = "database")]
-pub mod multi_region;
+// ── Multi-region — removed for basic setup ──────────────────────────────────
+// pub mod multi_region;
 
 // ── Adaptive rate limiting ────────────────────────────────────────────────────
 // #[cfg(feature = "cache")]
