@@ -13,6 +13,10 @@ mod tests {
         },
     };
 
+    // `unwrap()` is intentional throughout these tests: a panic is the correct
+    // failure signal when an operation that must succeed in the given test
+    // scenario returns an error.
+
     // -----------------------------------------------------------------------
     // Rotation schedule calculation
     // -----------------------------------------------------------------------

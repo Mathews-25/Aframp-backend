@@ -160,6 +160,10 @@ impl SequenceCoordinator {
 mod tests {
     use super::*;
 
+    // `unwrap()` is intentional throughout these tests: a panic is the correct
+    // failure signal when an operation that must succeed in the given test
+    // scenario returns an error.
+
     #[test]
     fn test_reserve_next_increments() {
         let coordinator = SequenceCoordinator::new(100, 10);
