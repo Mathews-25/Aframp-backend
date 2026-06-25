@@ -109,17 +109,22 @@ use uuid::Uuid;
 /// Graceful shutdown signal handler
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        if let Err(e) = signal::ctrl_c().await {
+            error!("failed to install Ctrl+C handler: {}", e);
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                error!("failed to install signal handler: {}", e);
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]
@@ -524,9 +529,10 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mint_audit_store = std::sync::Arc::new(
-        crate::audit::MintAuditStore::from_env().unwrap_or_else(|e| {
-            panic!("Mint audit store initialization failed: {}", e);
-        }),
+        crate::audit::MintAuditStore::from_env().map_err(|e| {
+            error!("Mint audit store initialization failed: {}", e);
+            anyhow::anyhow!("Mint audit store initialization failed: {}", e)
+        })?,
     );
 
     // ── Multi-level cache — built ONCE, shared by warming, admin, CDN, pipelines ──
@@ -585,10 +591,10 @@ async fn main() -> anyhow::Result<()> {
     // Initialize payment provider factory
     let provider_factory = if db_pool.is_some() {
         info!("💳 Initializing payment provider factory...");
-        let factory = std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+        let factory = std::sync::Arc::new(PaymentProviderFactory::from_env().map_err(|e| {
             error!("Failed to initialize payment provider factory: {}", e);
-            panic!("Cannot start without payment providers");
-        }));
+            anyhow::anyhow!("Cannot start without payment providers: {}", e)
+        })?);
         info!("✅ Payment provider factory initialized");
         Some(factory)
     } else {
@@ -986,10 +992,10 @@ async fn main() -> anyhow::Result<()> {
             database::webhook_repository::WebhookRepository::new(pool.clone()),
         );
         let provider_factory =
-            std::sync::Arc::new(PaymentProviderFactory::from_env().unwrap_or_else(|e| {
+            std::sync::Arc::new(PaymentProviderFactory::from_env().map_err(|e| {
                 error!("Failed to initialize payment provider factory: {}", e);
-                panic!("Cannot start without payment providers");
-            }));
+                anyhow::anyhow!("Cannot start without payment providers: {}", e)
+            })?);
 
         // Create orchestrator for webhook processing
         let transaction_repo = std::sync::Arc::new(
