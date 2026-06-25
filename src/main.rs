@@ -932,16 +932,22 @@ async fn main() -> anyhow::Result<()> {
                 warn!("CNGN_ISSUER_ADDRESS not set — skipping PoR worker");
             } else {
                 let por_signing_key = api::transparency::load_signing_key();
-                let por_worker = workers::por_worker::ProofOfReservesWorker::new(
+                match workers::por_worker::ProofOfReservesWorker::new(
                     pool,
                     client,
                     por_signing_key,
                     audit_writer.clone(),
                     asset_issuer,
                     anomaly_service.clone(),
-                );
-                tokio::spawn(por_worker.run(worker_shutdown_rx.clone()));
-                info!("✅ Proof-of-Reserves (PoR) worker started (60-min interval)");
+                ) {
+                    Ok(por_worker) => {
+                        tokio::spawn(por_worker.run(worker_shutdown_rx.clone()));
+                        info!("✅ Proof-of-Reserves (PoR) worker started (60-min interval)");
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Failed to initialize Proof-of-Reserves (PoR) worker (HTTP client build failure)");
+                    }
+                }
             }
         } else {
             info!("⏭️  Skipping PoR worker (no database or Stellar client)");

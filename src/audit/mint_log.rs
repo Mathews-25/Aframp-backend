@@ -311,16 +311,16 @@ mod tests {
     use std::sync::Arc;
     use uuid::Uuid;
 
-    fn create_temp_dir() -> PathBuf {
+    fn create_temp_dir() -> Result<PathBuf, std::io::Error> {
         let tmp = std::env::temp_dir().join(format!("mint_audit_tests_{}", Uuid::new_v4()));
-        fs::create_dir_all(&tmp).unwrap();
-        tmp
+        fs::create_dir_all(&tmp)?;
+        Ok(tmp)
     }
 
     #[tokio::test]
-    async fn append_and_verify_mint_audit_entry() {
-        let temp = create_temp_dir();
-        let store = Arc::new(MintAuditStore::new(temp).unwrap());
+    async fn append_and_verify_mint_audit_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = create_temp_dir()?;
+        let store = Arc::new(MintAuditStore::new(temp)?);
 
         let payload = json!({"transaction_id": "tx-1", "amount_cngn": "1000"});
         let entry = store
@@ -331,23 +331,23 @@ mod tests {
                 "MINT_REQUESTED".to_string(),
                 payload,
             )
-            .await
-            .unwrap();
+            .await?;
 
         assert_eq!(entry.action_type, "MINT_REQUESTED");
         assert_eq!(entry.previous_hash, GENESIS_HASH.to_string());
         assert_eq!(entry.current_hash.len(), 64);
 
-        let verification = store.verify().await.unwrap();
+        let verification = store.verify().await?;
         assert!(verification.valid);
         assert_eq!(verification.total_checked, 1);
         assert_eq!(verification.tampered_entries.len(), 0);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn detect_tampering_in_mint_audit_log() {
-        let temp = create_temp_dir();
-        let store = Arc::new(MintAuditStore::new(temp).unwrap());
+    async fn detect_tampering_in_mint_audit_log() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = create_temp_dir()?;
+        let store = Arc::new(MintAuditStore::new(temp)?);
 
         let payload = json!({"transaction_id": "tx-1", "amount_cngn": "1000"});
         let _ = store
@@ -358,15 +358,15 @@ mod tests {
                 "MINT_REQUESTED".to_string(),
                 payload,
             )
-            .await
-            .unwrap();
+            .await?;
 
-        let mut contents = fs::read_to_string(store.log_path.clone()).unwrap();
+        let mut contents = fs::read_to_string(store.log_path.clone())?;
         contents = contents.replace("MINT_REQUESTED", "MINT_SUBMITTED");
-        fs::write(&store.log_path, contents).unwrap();
+        fs::write(&store.log_path, contents)?;
 
-        let result = store.verify().await.unwrap();
+        let result = store.verify().await?;
         assert!(!result.valid);
         assert!(!result.tampered_entries.is_empty());
+        Ok(())
     }
 }

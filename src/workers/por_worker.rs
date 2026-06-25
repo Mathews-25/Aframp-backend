@@ -121,13 +121,17 @@ impl ProofOfReservesWorker {
         audit_writer: Option<Arc<AuditWriter>>,
         cngn_issuer: String,
         anomaly_service: Option<Arc<AnomalyDetectionService>>,
-    ) -> Self {
+    ) -> Result<Self, reqwest::Error> {
         let interval_secs = std::env::var("POR_INTERVAL_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(DEFAULT_INTERVAL_SECS);
 
-        Self {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()?;
+
+        Ok(Self {
             pool,
             stellar_client,
             banks: BankCredential::load_from_env(),
@@ -136,12 +140,9 @@ impl ProofOfReservesWorker {
             cngn_asset_code: "cNGN".to_string(),
             cngn_issuer,
             interval: Duration::from_secs(interval_secs),
-            http: reqwest::Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-                .expect("failed to build HTTP client"),
+            http,
             anomaly_service,
-        }
+        })
     }
 
     pub async fn run(self, mut shutdown_rx: watch::Receiver<bool>) {
@@ -827,50 +828,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ratio_calculation_fully_backed() {
-        let supply = BigDecimal::from_str("1000000").unwrap();
-        let bank = BigDecimal::from_str("1001000").unwrap();
+    fn ratio_calculation_fully_backed() -> Result<(), Box<dyn std::error::Error>> {
+        let supply = BigDecimal::from_str("1000000")?;
+        let bank = BigDecimal::from_str("1001000")?;
         let ratio = (&bank / &supply) * BigDecimal::from(100);
-        let ratio_f64: f64 = ratio.to_string().parse().unwrap();
+        let ratio_f64: f64 = ratio.to_string().parse()?;
         assert!(ratio_f64 >= UNDER_COLLATERAL_THRESHOLD);
+        Ok(())
     }
 
     #[test]
-    fn ratio_calculation_under_collateralized() {
-        let supply = BigDecimal::from_str("1000000").unwrap();
-        let bank = BigDecimal::from_str("999000").unwrap();
+    fn ratio_calculation_under_collateralized() -> Result<(), Box<dyn std::error::Error>> {
+        let supply = BigDecimal::from_str("1000000")?;
+        let bank = BigDecimal::from_str("999000")?;
         let ratio = (&bank / &supply) * BigDecimal::from(100);
-        let ratio_f64: f64 = ratio.to_string().parse().unwrap();
+        let ratio_f64: f64 = ratio.to_string().parse()?;
         assert!(ratio_f64 < UNDER_COLLATERAL_THRESHOLD);
+        Ok(())
     }
 
     #[test]
-    fn discrepancy_threshold_triggers_at_0_05_pct() {
+    fn discrepancy_threshold_triggers_at_0_05_pct() -> Result<(), Box<dyn std::error::Error>> {
         // 0.06% deviation should trigger
         let ratio_f64 = 99.94_f64;
         let deviation = (ratio_f64 - 100.0_f64).abs();
         assert!(deviation > DISCREPANCY_ALERT_THRESHOLD_PCT);
+        Ok(())
     }
 
     #[test]
-    fn discrepancy_threshold_does_not_trigger_below_0_05_pct() {
+    fn discrepancy_threshold_does_not_trigger_below_0_05_pct() -> Result<(), Box<dyn std::error::Error>> {
         // 0.04% deviation should NOT trigger
         let ratio_f64 = 99.96_f64;
         let deviation = (ratio_f64 - 100.0_f64).abs();
         assert!(deviation <= DISCREPANCY_ALERT_THRESHOLD_PCT);
+        Ok(())
     }
 
     #[test]
-    fn zero_supply_yields_100_pct_ratio() {
+    fn zero_supply_yields_100_pct_ratio() -> Result<(), Box<dyn std::error::Error>> {
         let supply = BigDecimal::from(0);
-        let bank = BigDecimal::from_str("1000000").unwrap();
+        let bank = BigDecimal::from_str("1000000")?;
         let ratio = if supply == BigDecimal::from(0) {
             BigDecimal::from(100)
         } else {
             (&bank / &supply) * BigDecimal::from(100)
         };
-        let ratio_f64: f64 = ratio.to_string().parse().unwrap();
+        let ratio_f64: f64 = ratio.to_string().parse()?;
         assert!((ratio_f64 - 100.0).abs() < 1e-9);
+        Ok(())
     }
 
     #[test]
